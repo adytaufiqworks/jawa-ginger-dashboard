@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<base target="_top">
+<script src="config.js"></script>
 <title>Jawa Ginger · Operations</title>
 <style>
 /* Light glass theme — Jawa Ginger */
@@ -41,7 +41,7 @@ dialog{color:#384e2d;position:fixed;margin:0 0 0 auto;height:100dvh;width:min(52
 <script>
 'use strict';
 // Pemetaan kolom dan kalkulasi dashboard.
-const SPREADSHEET_ID = '1xoZnBVFTLJNkzrCxYXGyUwUKDZv26m0OMZNUbiBNpJY';
+const SPREADSHEET_ID = window.JG_CONFIG?.spreadsheetId || '1xoZnBVFTLJNkzrCxYXGyUwUKDZv26m0OMZNUbiBNpJY';
 const SOURCES = {
     sales_performance: { label: 'Sales pipeline', column: 'AJ', identity: 'C', start: 3 },
     master_mitra: { label: 'Mitra', column: 'R', identity: 'C', start: 2 },
@@ -205,7 +205,7 @@ const unpaid = (r) => /^(sent invoice|pending payment|pending|unpaid|belum bayar
 function quality(rows) { return { undated: rows.filter(r => !r.date).length, errors: rows.filter(r => r.raw.some(v => str(v).startsWith('#'))).length, fallback: rows.filter(r => r.dateBasis.includes('kosong') && r.date).length }; }
 
 // Antarmuka dan komunikasi Google Apps Script.
-/* Seluruh state berada di halaman ini; data selalu diambil lewat google.script.run. */
+/* Data berada di memori halaman; pembacaan melalui endpoint Apps Script. */
 const Database='▦',Wallet='◈',Package='□',Users='♧',Clock='◷',ClipboardList='▤',ShoppingBag='▢',ChartNoAxesCombined='↗',Activity='⌁',Info='ⓘ',Leaf='◇',Layers='▱',Truck='▰',Check='✓',FlaskConical='♙';
 const menus=[{id:'overview',title:'Ringkasan',icon:'▦',group:'Dashboard'},{id:'pipeline',title:'Sales pipeline',icon:'↗',group:'Sales & mitra'},{id:'mitra',title:'Mitra & partner',icon:'♧',group:'Sales & mitra'},{id:'sales',title:'Penjualan',icon:'▥',group:'Sales & mitra'},{id:'products',title:'Produk',icon:'▱',group:'Sales & mitra'},{id:'marketplace',title:'Marketplace',icon:'▢',group:'Sales & mitra'},{id:'inventory',title:'Stok & warehouse',icon:'□',group:'Operasional'},{id:'orders',title:'Order & fulfillment',icon:'▤',group:'Operasional'},{id:'payments',title:'Pembayaran',icon:'◈',group:'Operasional'},{id:'logistics',title:'Logistik',icon:'▰',group:'Operasional'},{id:'samples',title:'Sample',icon:'♙',group:'Operasional'}];
 const dependencies={overview:['penjualan_mitra','penjualan_mp','master_mitra','sales_performance'],pipeline:['sales_performance'],mitra:['master_mitra','master_partner'],sales:['penjualan_mitra','penjualan_mp'],products:['penjualan_mitra','penjualan_mp'],marketplace:['penjualan_mp'],inventory:['stockcard_andalan'],orders:['order_mitra'],payments:['penjualan_mitra'],logistics:['cargo_recap','lincah_recap'],samples:['sample_recap']};
@@ -444,7 +444,44 @@ function renderResults(c){let s='';const errors=dependencies[state.view].filter(
  if(state.view==='inventory')s+=inventoryTable(c.stock);s+=table(c);$('dashboard').innerHTML=s;$('dashboard').setAttribute('aria-busy',String(state.busy));
 }
 function render(full=true){if(!state.all.master_mitra)rebuild();const c=context();if(full){renderNav();renderFilters(c);const menu=menus.find(m=>m.id===state.view);$('heading').textContent=state.view==='overview'?'Dashboard overview':menu.title;$('breadcrumb').textContent=menu.title;}renderResults(c);$('lastUpdate').textContent='Last Update Data: '+time(state.meta.lastUpdateData);$('lastRefresh').textContent='Last refresh: '+(state.meta.lastRefresh?time(state.meta.lastRefresh):'—');$('sourceSummary').textContent=(state.meta.spreadsheetName||'MASTER OPS JAWA GINGER + SALES PERFORMANCE')+' · '+keys.filter(k=>state.sources[k]&&state.sources[k].rows).length+'/'+keys.length+' sumber terbaca';$('refreshButton').disabled=state.busy;$('refreshLabel').textContent=state.busy?'Memperbarui':'Refresh data';$('refreshIcon').classList.toggle('spin',state.busy);$('loading').hidden=!state.busy;$('globalError').hidden=!state.globalError&&!state.meta.metadataWarning;$('globalError').textContent=state.globalError||state.meta.metadataWarning||'';}
-function fetchData(){if(state.busy)return;state.busy=true;state.globalError='';render(false);if(!window.google||!google.script||!google.script.run){state.busy=false;state.globalError='Halaman ini harus dibuka melalui URL Web app Google Apps Script (/exec).';render(false);return}google.script.run.withSuccessHandler(data=>{try{if(!data||!data.sources)throw new Error('Format data tidak valid.');for(const k of keys){const source=data.sources[k];if(source&&Array.isArray(source.rows))state.sources[k]={rows:source.rows,loadedAt:source.loadedAt,error:null};else state.sources[k]={...state.sources[k],error:source&&source.error?source.error:'Sumber tidak dikembalikan.'};}state.meta={...data,lastUpdateData:data.lastUpdateData||state.meta.lastUpdateData};rebuild();}catch(error){state.globalError='Data belum dapat digunakan: '+(error.message||String(error));}finally{state.busy=false;render(true);}}).withFailureHandler(error=>{state.busy=false;state.globalError='Belum berhasil membaca spreadsheet. '+(error&&error.message?error.message:String(error))+(keys.some(k=>state.sources[k]&&state.sources[k].rows)?' Data sebelumnya tetap ditampilkan.':' Jalankan testConnection dari editor Apps Script, lalu cek akun dan izin deployment.');render(false);}).getDashboardData()}
+// Pembacaan anonim melalui endpoint Apps Script. Data hanya di memori halaman.
+async function fetchData() {
+ if (state.busy) return;
+ state.busy = true; state.globalError = ''; render(false);
+ try {
+  const endpoint = new URL(window.JG_CONFIG?.webAppUrl || '');
+  if (endpoint.origin !== 'https://script.google.com' || !/^\/macros\/s\/[^/]+\/exec$/.test(endpoint.pathname))
+   throw new Error('Isi webAppUrl dengan URL deployment Apps Script /exec di config.js.');
+  endpoint.searchParams.set('action', 'data');
+  endpoint.searchParams.set('_', String(Date.now()));
+  const response = await fetch(endpoint.href, {redirect:'follow', credentials:'omit', signal:AbortSignal.timeout(120000)});
+  if (!response.ok) throw new Error('Pembacaan webapp gagal: HTTP ' + response.status);
+  const text = await response.text();
+  let data;
+  try { data = JSON.parse(text); }
+  catch { throw new Error('Webapp belum mengirim JSON. Ganti Code.gs dan deploy versi baru. Pastikan akses Anyone.'); }
+  if (data.error) throw new Error(data.error);
+  if (!data.sources || typeof data.sources !== 'object') throw new Error('Format data webapp tidak sesuai.');
+  const sources = {};
+  for (const key of keys) {
+   const source = data.sources[key];
+   sources[key] = source && Array.isArray(source.rows)
+    ? {rows:source.rows, loadedAt:source.loadedAt || data.lastRefresh, error:source.error || null}
+    : {error:source?.error || 'Tab ' + key + ' tidak dikirim oleh webapp.'};
+  }
+  state.sources = sources;
+  state.meta = {spreadsheetName:data.spreadsheetName, lastUpdateData:data.lastUpdateData,
+   lastRefresh:data.lastRefresh, metadataWarning:data.metadataWarning || ''};
+  rebuild();
+ } catch (error) {
+  state.globalError = error.name === 'TimeoutError'
+   ? 'Pembacaan melewati 2 menit. Klik Refresh untuk mencoba lagi.'
+   : error instanceof TypeError
+    ? 'Koneksi webapp gagal. Periksa internet, URL /exec, akses Anyone, dan deployment Code.gs terbaru.'
+    : error.message || String(error);
+ } finally { state.busy = false; render(true); }
+}
+
 function sidebar(open){$('sidebar').classList.toggle('is-open',open);$('sidebarShade').hidden=!open;$('menuToggle').setAttribute('aria-expanded',String(open));if(open)$('sidebar').querySelector('[aria-current="page"]').focus();else $('menuToggle').focus()}
 function detail(r){$('detailTitle').textContent=r.name;$('detailSub').textContent=SOURCES[r.source].label+' · Baris '+r.row+' · '+r.dateBasis+': '+(r.date||'Tidak tersedia');$('detailBody').innerHTML=`<dl class="detail-list">${r.raw.map((v,i)=>str(v)?`<div class="detail-item"><dt>${esc(r.headers[i]||'Kolom '+(i+1))}</dt><dd>${/^https:\/\//i.test(str(v))?`<a href="${esc(v)}" target="_blank" rel="noopener">Buka tautan ↗</a>`:esc(v)}</dd></div>`:'').join('')}</dl>`;$('detailDialog').showModal()}
 function definitions(){const definitions=[['Last Update Data','Waktu modifikasi file spreadsheet di Google Drive. Last refresh adalah waktu pembacaan dashboard. Keduanya berbeda; kalkulasi ulang formula otomatis dapat berbeda dari waktu modifikasi file.'],['Total penjualan','Setoran mitra sebelum potongan + gross sales marketplace. Nilai order tidak ditambahkan ke omzet.'],['Pembayaran','Menggunakan total invoice. Lunas hanya Done payment; outstanding hanya Sent invoice / Pending payment / Unpaid. Status lain dihitung terpisah.'],['Tanggal','Mitra memakai tanggal laporan, lalu tanggal pembayaran jika tanggal laporan kosong/tidak valid. Order memakai tanggal order, lalu tanggal pemenuhan jika tanggal order kosong/tidak valid. Tanggal di luar 2000–2100 dianggap tidak valid.'],['Data tidak lengkap','Baris tanpa tanggal ikut total semua periode, tetapi tidak ikut grafik atau filter bulan. Angka kosong/error tidak menambah total. Nama yang berupa error formula tidak menjadi record dashboard.'],['Saldo stok','Masuk − keluar sampai akhir bulan pilihan; bukan hasil stock opname. Nama SKU berbeda tidak digabung otomatis. Unit mengikuti kemasan sumber.'],['Mitra & konversi','Mitra aktif mengikuti status master saat ini. Pipeline menampilkan proporsi status Active; bukan konversi cohort. Sample dihitung per baris penerima, nama berulang belum digabung.'],['Filter','Filter berlaku pada sumber yang memiliki nilai kolom terkait. Misalnya pemilihan regional tidak mencakup marketplace yang tidak memiliki regional. Saldo stok mengikuti periode, warehouse, dan pencarian SKU; mutasi mengikuti periode pilihan.']];$('detailTitle').textContent='Sumber & definisi data';$('detailSub').textContent='Data dibaca saat dibuka dan ketika Refresh ditekan.';$('detailBody').innerHTML=`<div class="sources-list">${keys.map(k=>`<div class="glass source-row"><div>${esc(SOURCES[k].label)}<small>${state.sources[k]&&state.sources[k].rows?integer(state.all[k].length)+' baris valid':''}</small></div>${statusHtml(state.sources[k]&&state.sources[k].error?(state.sources[k].rows?'Data lama':'Gagal'):state.sources[k]&&state.sources[k].rows?'Terbaca':'Belum dibaca')}</div>`).join('')}</div><div class="metric-definitions">${definitions.map(([name,description])=>`<p><strong>${name}</strong><br>${description}</p>`).join('')}</div>`;$('detailDialog').showModal()}
